@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "reg.h"
 #include "asm.h"
+#include "host.h"
 
 /* Size of our user task stacks in words */
 #define STACK_SIZE	256
@@ -14,6 +15,14 @@
  * set when that data is transferred to the TDR
  */
 #define USART_FLAG_TXE	((uint16_t) 0x0080)
+
+int semihost_handler;
+const char *buffer_os_in = "OS switching in.\n";
+const char *buffer_os_out = "OS switching out.\n";
+const char *buffer_task1_in = "Task 1 switching in.\n";
+const char *buffer_task1_out = "Task 1 switching out.\n";
+const char *buffer_task2_in = "Task 2 switching in.\n";
+const char *buffer_task2_out = "Task 2 switching out.\n";
 
 void usart_init(void)
 {
@@ -83,24 +92,32 @@ unsigned int *create_task(unsigned int *stack, void (*start)(void))
 
 void task1_func(void)
 {
+	host_action(SYS_WRITE, semihost_handler, (void *)buffer_task1_in, strlen(buffer_task1_in));
 	print_str("task1: Created!\n");
 	print_str("task1: Now, return to kernel mode\n");
+	host_action(SYS_WRITE, semihost_handler, (void *)buffer_task2_out, strlen(buffer_task2_out));
 	syscall();
+	host_action(SYS_WRITE, semihost_handler, (void *)buffer_task1_in, strlen(buffer_task1_in));
 	while (1) {
 		print_str("task1: Running...\n");
 		delay(1000);
 	}
+	host_action(SYS_WRITE, semihost_handler, (void *)buffer_task2_out, strlen(buffer_task2_out));
 }
 
 void task2_func(void)
 {
+	host_action(SYS_WRITE, semihost_handler, (void *)buffer_task2_in, strlen(buffer_task2_in));
 	print_str("task2: Created!\n");
 	print_str("task2: Now, return to kernel mode\n");
+	host_action(SYS_WRITE, semihost_handler, (void *)buffer_task2_out, strlen(buffer_task2_out));
 	syscall();
+	host_action(SYS_WRITE, semihost_handler, (void *)buffer_task2_in, strlen(buffer_task2_in));
 	while (1) {
 		print_str("task2: Running...\n");
 		delay(1000);
 	}
+	host_action(SYS_WRITE, semihost_handler, (void *)buffer_task2_out, strlen(buffer_task2_out));
 }
 
 int main(void)
@@ -112,6 +129,9 @@ int main(void)
 
 	usart_init();
 
+	semihost_handler = host_action(SYS_SYSTEM, "touch log");
+	semihost_handler = host_action(SYS_OPEN, "log", 4);
+
 	print_str("OS: Starting...\n");
 	print_str("OS: First create task 1\n");
 	usertasks[0] = create_task(user_stacks[0], &task1_func);
@@ -121,6 +141,7 @@ int main(void)
 	task_count += 1;
 
 	print_str("\nOS: Start round-robin scheduler!\n");
+	host_action(SYS_CLOSE, semihost_handler);
 
 	/* SysTick configuration */
 	*SYSTICK_LOAD = 7200000;
@@ -129,9 +150,19 @@ int main(void)
 	current_task = 0;
 
 	while (1) {
+		semihost_handler = host_action(SYS_OPEN, "log", 8);
+		if(semihost_handler == -1) {
+        	print_str("Open file error!\n");
+    	}
+
 		print_str("OS: Activate next task\n");
+		host_action(SYS_WRITE, semihost_handler, (void *)buffer_os_out, strlen(buffer_os_out));
 		usertasks[current_task] = activate(usertasks[current_task]);
+
+		host_action(SYS_WRITE, semihost_handler, (void *)buffer_os_in, strlen(buffer_os_in));
 		print_str("OS: Back to OS\n");
+
+		host_action(SYS_CLOSE, semihost_handler);
 
 		current_task = current_task == (task_count - 1) ? 0 : current_task + 1;
 	}
